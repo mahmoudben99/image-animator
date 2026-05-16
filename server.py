@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -218,31 +219,128 @@ def get_version() -> dict:
     return {"version": APP_VERSION, "build": APP_BUILD}
 
 
+def _fetch_latest_release() -> dict:
+    if not GITHUB_REPO:
+        raise HTTPException(status_code=400, detail="no repo configured in version.json")
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def _find_patch_asset(release: dict) -> Optional[dict]:
+    for a in (release.get("assets") or []):
+        name = (a.get("name") or "").lower()
+        if "patch" in name and name.endswith(".zip"):
+            return a
+    return None
+
+
 @app.get("/api/check-update")
 def check_update() -> dict:
-    if not GITHUB_REPO:
-        return {"available": False, "reason": "no repo configured"}
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json()
+        data = _fetch_latest_release()
+    except HTTPException as exc:
+        return {"available": False, "reason": exc.detail}
     except Exception as exc:  # noqa: BLE001
         return {"available": False, "reason": str(exc)}
     tag = (data.get("tag_name") or "").lstrip("v")
-    asset = None
-    for a in data.get("assets") or []:
-        if a.get("name", "").endswith(".zip"):
-            asset = a
-            break
+    patch_asset = _find_patch_asset(data)
     return {
         "available": bool(tag and tag != APP_VERSION),
         "latest_version": tag,
         "current_version": APP_VERSION,
-        "asset_url": asset.get("browser_download_url") if asset else None,
-        "asset_name": asset.get("name") if asset else None,
+        "patch_available": bool(patch_asset),
+        "patch_asset_url": patch_asset.get("browser_download_url") if patch_asset else None,
+        "release_url": data.get("html_url"),
         "release_notes": data.get("body") or "",
     }
+
+
+# A self-deleting Windows .bat that waits for the running app to exit, extracts
+# the downloaded patch over the app folder, then relaunches the main .bat.
+UPDATER_BAT = r"""@echo off
+setlocal EnableExtensions
+set "PID=%~1"
+set "PATCH=%~2"
+set "APPDIR=%~3"
+set "LAUNCHBAT=%~4"
+
+set /a TRIES=0
+:waitloop
+tasklist /FI "PID eq %PID%" 2>NUL | findstr /C:"%PID%" >NUL
+if errorlevel 1 goto do_extract
+set /a TRIES+=1
+if %TRIES% GEQ 60 goto do_extract
+timeout /t 1 /nobreak >NUL
+goto waitloop
+
+:do_extract
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PATCH%' -DestinationPath '%APPDIR%' -Force"
+del "%PATCH%" 2>NUL
+start "" "%LAUNCHBAT%"
+(goto) 2>NUL & del "%~f0"
+"""
+
+
+def _spawn_updater(patch_path: Path) -> None:
+    bat_path = Path(tempfile.gettempdir()) / f"image_animator_updater_{uuid.uuid4().hex[:8]}.bat"
+    bat_path.write_text(UPDATER_BAT, encoding="ascii", newline="\r\n")
+
+    # Image Animator.bat sits one level above this app/ folder
+    launcher_bat = HERE.parent / "Image Animator.bat"
+
+    args = [
+        "cmd.exe", "/c", str(bat_path),
+        str(os.getpid()),
+        str(patch_path),
+        str(HERE),
+        str(launcher_bat),
+    ]
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen(args, creationflags=creationflags, close_fds=True)
+
+    # Give the response a moment to flush back to the browser, then exit hard
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+
+
+@app.post("/api/perform-update")
+def perform_update() -> dict:
+    try:
+        release = _fetch_latest_release()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"GitHub fetch failed: {exc}")
+
+    tag = (release.get("tag_name") or "").lstrip("v")
+    if not tag or tag == APP_VERSION:
+        raise HTTPException(status_code=400, detail="already on the latest version")
+
+    asset = _find_patch_asset(release)
+    if not asset:
+        raise HTTPException(
+            status_code=400,
+            detail="no patch asset for this release — manual full re-download required",
+        )
+
+    patch_url = asset["browser_download_url"]
+    staging = HERE / ".update-staging"
+    staging.mkdir(exist_ok=True)
+    patch_path = staging / f"patch-{tag}.zip"
+
+    try:
+        with requests.get(patch_url, stream=True, timeout=60) as resp:
+            resp.raise_for_status()
+            with open(patch_path, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"patch download failed: {exc}")
+
+    _spawn_updater(patch_path)
+    return {"ok": True, "new_version": tag}
 
 
 @app.post("/api/upload")

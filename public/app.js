@@ -20,6 +20,7 @@ const els = {
   updateTitle: document.querySelector("#updateTitle"),
   updateBody: document.querySelector("#updateBody"),
   updateCloseBtn: document.querySelector("#updateCloseBtn"),
+  installUpdateBtn: document.querySelector("#installUpdateBtn"),
 };
 
 boot();
@@ -76,6 +77,7 @@ function bindEvents() {
   els.openOutputBtn.addEventListener("click", () => fetchJson("/api/reveal-output", { method: "POST" }));
   els.checkUpdateBtn.addEventListener("click", checkForUpdates);
   els.updateCloseBtn.addEventListener("click", () => els.updateModal.setAttribute("hidden", ""));
+  els.installUpdateBtn.addEventListener("click", installUpdate);
 }
 
 function pickRandomMotion() {
@@ -305,8 +307,9 @@ function cardTemplate(item) {
 }
 
 async function checkForUpdates() {
+  els.installUpdateBtn.setAttribute("hidden", "");
   els.updateTitle.textContent = "Checking…";
-  els.updateBody.textContent = "Contacting GitHub…";
+  els.updateBody.innerHTML = "<p>Contacting GitHub…</p>";
   els.updateModal.removeAttribute("hidden");
   try {
     const data = await fetchJson("/api/check-update");
@@ -315,21 +318,53 @@ async function checkForUpdates() {
       const note = data.latest_version
         ? `Current: v${data.current_version} · Latest: v${data.latest_version}`
         : `Current: v${data.current_version}`;
-      els.updateBody.textContent = note + (data.reason ? `\n${data.reason}` : "");
+      els.updateBody.innerHTML = `<p>${escapeHtml(note)}</p>` + (data.reason ? `<p style="color:var(--muted);font-size:12px;">${escapeHtml(data.reason)}</p>` : "");
+      return;
+    }
+
+    els.updateTitle.textContent = `Update available: v${data.latest_version}`;
+    const notesHtml = data.release_notes
+      ? `<details style="margin-top:8px;"><summary style="cursor:pointer;color:var(--muted);font-size:12px;">Release notes</summary><pre style="white-space:pre-wrap;color:var(--muted);font-size:12px;margin:6px 0 0;">${escapeHtml(data.release_notes)}</pre></details>`
+      : "";
+
+    if (data.patch_available) {
+      els.updateBody.innerHTML = `
+        <p>Current: v${escapeHtml(data.current_version)} → v${escapeHtml(data.latest_version)}</p>
+        <p style="color:var(--muted);font-size:12px;">Small download (~100 KB). The app will restart automatically.</p>
+        ${notesHtml}
+      `;
+      els.installUpdateBtn.textContent = `Install v${data.latest_version}`;
+      els.installUpdateBtn.removeAttribute("hidden");
+      els.installUpdateBtn.disabled = false;
     } else {
-      els.updateTitle.textContent = `Update available: v${data.latest_version}`;
-      const link = data.asset_url
-        ? `<p><a href="${data.asset_url}" target="_blank" rel="noopener">Download v${data.latest_version}</a></p>`
+      const link = data.release_url
+        ? `<p><a href="${data.release_url}" target="_blank" rel="noopener">Open release page</a></p>`
         : "";
       els.updateBody.innerHTML = `
-        <p>Current: v${data.current_version}</p>
+        <p>Current: v${escapeHtml(data.current_version)} → v${escapeHtml(data.latest_version)}</p>
+        <p style="color:var(--muted);font-size:12px;">This update requires a manual full re-download — likely a major change.</p>
         ${link}
-        <p style="margin-top:8px;color:var(--muted);font-size:12px;">${escapeHtml(data.release_notes || "")}</p>
+        ${notesHtml}
       `;
     }
   } catch (err) {
     els.updateTitle.textContent = "Could not check updates";
-    els.updateBody.textContent = err.message;
+    els.updateBody.innerHTML = `<p>${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function installUpdate() {
+  els.installUpdateBtn.disabled = true;
+  els.updateTitle.textContent = "Installing…";
+  els.updateBody.innerHTML = `<p><span class="spinner"></span>&nbsp;Downloading update…</p>`;
+  try {
+    const data = await fetchJson("/api/perform-update", { method: "POST" });
+    els.updateTitle.textContent = `Updating to v${data.new_version}`;
+    els.updateBody.innerHTML = `<p><span class="spinner"></span>&nbsp;Restarting the app…</p><p style="color:var(--muted);font-size:12px;">This window will close in a few seconds. The new version will open automatically.</p>`;
+  } catch (err) {
+    els.updateTitle.textContent = "Update failed";
+    els.updateBody.innerHTML = `<p>${escapeHtml(err.message)}</p>`;
+    els.installUpdateBtn.disabled = false;
   }
 }
 
