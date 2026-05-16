@@ -1,0 +1,13 @@
+[project]
+name = "image-animator"
+version = "0.1.0"
+description = "Drag-drop image animator using DepthFlow"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "depthflow>=0.9.1",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.12",
+    "pywebview>=5.3",
+    "requests>=2.32",
+]

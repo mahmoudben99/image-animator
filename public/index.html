@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image Animator</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">IA</span>
+        <div>
+          <h1>Image Animator</h1>
+          <p id="versionLabel">Build —</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="openOutputBtn" class="secondary" type="button" title="Open the output folder">Open output folder</button>
+        <button id="checkUpdateBtn" class="secondary" type="button">Check for updates</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="dropZone" class="drop-zone">
+        <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden />
+        <div class="drop-zone-inner">
+          <strong>Drop images here</strong>
+          <p>or click to choose. PNG / JPG / WEBP. Each image gets a random camera move you can change.</p>
+        </div>
+      </section>
+
+      <section class="toolbar">
+        <div class="toolbar-left">
+          <button id="shuffleBtn" class="secondary" type="button" title="Re-roll camera moves for all pending images">Re-roll all motions</button>
+          <button id="clearBtn" class="secondary" type="button" title="Remove all images">Clear all</button>
+        </div>
+        <div class="toolbar-right">
+          <span id="queueStatus" class="status">No images yet</span>
+          <button id="renderAllBtn" class="primary" type="button" disabled>Render all</button>
+        </div>
+      </section>
+
+      <section id="grid" class="grid" aria-live="polite"></section>
+    </main>
+
+    <div id="updateModal" class="modal" hidden>
+      <div class="modal-card">
+        <h2 id="updateTitle">Checking for updates…</h2>
+        <p id="updateBody"></p>
+        <div class="modal-actions">
+          <button id="updateCloseBtn" class="secondary" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
