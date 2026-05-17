@@ -112,7 +112,22 @@ select:focus { outline: 3px solid color-mix(in srgb, var(--accent), transparent 
 .top-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
 }
+
+.output-dir {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.output-dir:hover { color: var(--accent); }
 
 .workspace {
   max-width: 1400px;

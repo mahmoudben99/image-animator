@@ -42,6 +42,35 @@ WORK_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ImageAnimat
 UPLOADS_DIR = WORK_DIR / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+SETTINGS_PATH = WORK_DIR / "settings.json"
+
+
+def load_settings() -> dict:
+    if SETTINGS_PATH.exists():
+        try:
+            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
+
+
+def save_settings(data: dict) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def current_output_dir() -> Path:
+    custom = load_settings().get("output_dir")
+    if custom:
+        p = Path(custom)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:  # noqa: BLE001
+            pass
+    DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_OUTPUT_DIR
+
 
 # ---------- Motion presets ----------
 MOTIONS = [
@@ -100,7 +129,12 @@ MOTIONS = [
     },
 ]
 
-DEFAULT_MOTION_IDS = [m["id"] for m in MOTIONS if m["id"] != "diagonal_pan_zoom"]
+# Motions excluded from the random pool — still selectable manually from the
+# dropdown, but never auto-assigned. subtle_drift is too subtle to read as
+# motion on first glance; diagonal_pan_zoom chains two presets and tends to
+# wobble.
+_NON_RANDOM_MOTIONS = {"subtle_drift", "diagonal_pan_zoom"}
+DEFAULT_MOTION_IDS = [m["id"] for m in MOTIONS if m["id"] not in _NON_RANDOM_MOTIONS]
 
 
 def motion_by_id(motion_id: str) -> dict:
@@ -208,10 +242,33 @@ def get_config() -> dict:
         "version": APP_VERSION,
         "build": APP_BUILD,
         "github_repo": GITHUB_REPO,
-        "output_dir": str(DEFAULT_OUTPUT_DIR),
+        "output_dir": str(current_output_dir()),
         "motions": MOTIONS,
         "default_motion_ids": DEFAULT_MOTION_IDS,
     }
+
+
+@app.post("/api/pick-output-dir")
+def pick_output_dir() -> dict:
+    # webview lives in the GUI thread; importing locally to avoid loading it
+    # if the server is ever run headless (e.g. tests).
+    try:
+        import webview  # noqa: PLC0415
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"webview unavailable: {exc}")
+    if not webview.windows:
+        raise HTTPException(status_code=500, detail="no window")
+    result = webview.windows[0].create_file_dialog(
+        webview.FOLDER_DIALOG, allow_multiple=False,
+    )
+    if not result:
+        return {"cancelled": True, "output_dir": str(current_output_dir())}
+    new_dir = Path(result[0])
+    new_dir.mkdir(parents=True, exist_ok=True)
+    settings = load_settings()
+    settings["output_dir"] = str(new_dir)
+    save_settings(settings)
+    return {"output_dir": str(new_dir)}
 
 
 @app.get("/api/version")
@@ -390,7 +447,7 @@ def start_render(payload: dict) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     stem = image_path.stem
-    output_path = DEFAULT_OUTPUT_DIR / f"{stem}__{motion_id}__{job_id}.mp4"
+    output_path = current_output_dir() / f"{stem}__{motion_id}__{job_id}.mp4"
     job = Job(
         id=job_id,
         image_path=image_path,
@@ -431,13 +488,14 @@ def get_video(job_id: str):
 @app.post("/api/reveal-output")
 def reveal_output() -> dict:
     """Open the output folder in Explorer."""
+    out = current_output_dir()
     if sys.platform == "win32":
-        os.startfile(str(DEFAULT_OUTPUT_DIR))  # noqa: S606
+        os.startfile(str(out))  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(DEFAULT_OUTPUT_DIR)])  # noqa: S603,S607
+        subprocess.Popen(["open", str(out)])  # noqa: S603,S607
     else:
-        subprocess.Popen(["xdg-open", str(DEFAULT_OUTPUT_DIR)])  # noqa: S603,S607
-    return {"ok": True, "path": str(DEFAULT_OUTPUT_DIR)}
+        subprocess.Popen(["xdg-open", str(out)])  # noqa: S603,S607
+    return {"ok": True, "path": str(out)}
 
 
 # Static frontend

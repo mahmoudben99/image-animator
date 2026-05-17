@@ -14,6 +14,8 @@ const els = {
   clearBtn: document.querySelector("#clearBtn"),
   renderAllBtn: document.querySelector("#renderAllBtn"),
   queueStatus: document.querySelector("#queueStatus"),
+  outputDirLabel: document.querySelector("#outputDirLabel"),
+  changeOutputBtn: document.querySelector("#changeOutputBtn"),
   openOutputBtn: document.querySelector("#openOutputBtn"),
   checkUpdateBtn: document.querySelector("#checkUpdateBtn"),
   updateModal: document.querySelector("#updateModal"),
@@ -30,10 +32,21 @@ async function boot() {
   try {
     state.config = await fetchJson("/api/config");
     els.versionLabel.textContent = `Build ${state.config.build} · v${state.config.version}`;
+    updateOutputDirLabel(state.config.output_dir);
   } catch (err) {
     els.versionLabel.textContent = "Build offline";
     console.error(err);
   }
+}
+
+function updateOutputDirLabel(path) {
+  if (!path) return;
+  state.config.output_dir = path;
+  // Truncate the start of long paths so the tail (folder name) stays visible
+  const max = 50;
+  const display = path.length > max ? "…" + path.slice(path.length - max + 1) : path;
+  els.outputDirLabel.textContent = display;
+  els.outputDirLabel.title = "Output folder: " + path + "\nClick to change";
 }
 
 function bindEvents() {
@@ -75,6 +88,8 @@ function bindEvents() {
   els.clearBtn.addEventListener("click", clearAll);
   els.renderAllBtn.addEventListener("click", renderAll);
   els.openOutputBtn.addEventListener("click", () => fetchJson("/api/reveal-output", { method: "POST" }));
+  els.changeOutputBtn.addEventListener("click", pickOutputFolder);
+  els.outputDirLabel.addEventListener("click", pickOutputFolder);
   els.checkUpdateBtn.addEventListener("click", checkForUpdates);
   els.updateCloseBtn.addEventListener("click", () => els.updateModal.setAttribute("hidden", ""));
   els.installUpdateBtn.addEventListener("click", installUpdate);
@@ -304,6 +319,21 @@ function cardTemplate(item) {
     </div>
     ${item.error ? `<p class="card-error">${escapeHtml(item.error)}</p>` : ""}
   `;
+}
+
+async function pickOutputFolder() {
+  els.changeOutputBtn.disabled = true;
+  const prevLabel = els.changeOutputBtn.textContent;
+  els.changeOutputBtn.textContent = "Picking…";
+  try {
+    const data = await fetchJson("/api/pick-output-dir", { method: "POST" });
+    if (data.output_dir) updateOutputDirLabel(data.output_dir);
+  } catch (err) {
+    alert("Could not change folder: " + err.message);
+  } finally {
+    els.changeOutputBtn.disabled = false;
+    els.changeOutputBtn.textContent = prevLabel;
+  }
 }
 
 async function checkForUpdates() {
