@@ -316,8 +316,16 @@ def check_update() -> dict:
 
 # A self-deleting Windows .bat that waits for the running app to exit, extracts
 # the downloaded patch over the app folder, then relaunches the main .bat.
+# Uses `ping` as a sleep (works without a console — `timeout` requires one).
+# Logs every step to %TEMP%\image_animator_updater.log so we can diagnose
+# failed updates after the fact.
 UPDATER_BAT = r"""@echo off
 setlocal EnableExtensions
+set "LOG=%TEMP%\image_animator_updater.log"
+echo. >> "%LOG%"
+echo [%DATE% %TIME%] updater started >> "%LOG%"
+echo PID=%~1 PATCH=%~2 APPDIR=%~3 LAUNCHBAT=%~4 >> "%LOG%"
+
 set "PID=%~1"
 set "PATCH=%~2"
 set "APPDIR=%~3"
@@ -325,17 +333,21 @@ set "LAUNCHBAT=%~4"
 
 set /a TRIES=0
 :waitloop
-tasklist /FI "PID eq %PID%" 2>NUL | findstr /C:"%PID%" >NUL
+tasklist /FI "PID eq %PID%" 2>NUL | find "%PID%" >NUL
 if errorlevel 1 goto do_extract
 set /a TRIES+=1
-if %TRIES% GEQ 60 goto do_extract
-timeout /t 1 /nobreak >NUL
+if %TRIES% GEQ 30 goto do_extract
+ping -n 2 127.0.0.1 >NUL
 goto waitloop
 
 :do_extract
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PATCH%' -DestinationPath '%APPDIR%' -Force"
+echo [%DATE% %TIME%] extracting %PATCH% to %APPDIR% >> "%LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%PATCH%' -DestinationPath '%APPDIR%' -Force" >>"%LOG%" 2>&1
+echo [%DATE% %TIME%] extract errorlevel=%ERRORLEVEL% >> "%LOG%"
 del "%PATCH%" 2>NUL
+echo [%DATE% %TIME%] launching %LAUNCHBAT% >> "%LOG%"
 start "" "%LAUNCHBAT%"
+echo [%DATE% %TIME%] updater done >> "%LOG%"
 (goto) 2>NUL & del "%~f0"
 """
 
@@ -356,7 +368,10 @@ def _spawn_updater(patch_path: Path) -> None:
     ]
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_NO_WINDOW hides the console window but still gives the bat a
+        # console so `tasklist` / `ping` / `start` behave normally.
+        # CREATE_NEW_PROCESS_GROUP keeps the child alive when we os._exit().
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(args, creationflags=creationflags, close_fds=True)
 
     # Give the response a moment to flush back to the browser, then exit hard
