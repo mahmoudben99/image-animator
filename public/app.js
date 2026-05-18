@@ -18,6 +18,7 @@ const els = {
   changeOutputBtn: document.querySelector("#changeOutputBtn"),
   openOutputBtn: document.querySelector("#openOutputBtn"),
   checkUpdateBtn: document.querySelector("#checkUpdateBtn"),
+  defaultDurationInput: document.querySelector("#defaultDurationInput"),
   updateModal: document.querySelector("#updateModal"),
   updateTitle: document.querySelector("#updateTitle"),
   updateBody: document.querySelector("#updateBody"),
@@ -33,6 +34,9 @@ async function boot() {
     state.config = await fetchJson("/api/config");
     els.versionLabel.textContent = `Build ${state.config.build} · v${state.config.version}`;
     updateOutputDirLabel(state.config.output_dir);
+    els.defaultDurationInput.min = state.config.duration_min;
+    els.defaultDurationInput.max = state.config.duration_max;
+    els.defaultDurationInput.value = state.config.default_duration;
   } catch (err) {
     els.versionLabel.textContent = "Build offline";
     console.error(err);
@@ -91,6 +95,7 @@ function bindEvents() {
   els.changeOutputBtn.addEventListener("click", pickOutputFolder);
   els.outputDirLabel.addEventListener("click", pickOutputFolder);
   els.checkUpdateBtn.addEventListener("click", checkForUpdates);
+  els.defaultDurationInput.addEventListener("change", saveDefaultDuration);
   els.updateCloseBtn.addEventListener("click", () => els.updateModal.setAttribute("hidden", ""));
   els.installUpdateBtn.addEventListener("click", installUpdate);
 }
@@ -113,6 +118,7 @@ async function addFiles(files) {
       image_id: null,
       preview_url: null,
       motion_id: pickRandomMotion(),
+      duration: state.config?.default_duration ?? 7,
       status: "uploading",
       job_id: null,
       output_url: null,
@@ -173,7 +179,11 @@ async function startRender(item) {
     const resp = await fetch("/api/render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image_id: item.image_id, motion_id: item.motion_id, duration: 5 }),
+      body: JSON.stringify({
+        image_id: item.image_id,
+        motion_id: item.motion_id,
+        duration: clampDuration(item.duration),
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || "render failed");
@@ -270,6 +280,20 @@ function render() {
         render();
       });
     }
+
+    const durationInput = card.querySelector("[data-field='duration']");
+    if (durationInput) {
+      durationInput.addEventListener("change", (e) => {
+        item.duration = clampDuration(e.target.value);
+        e.target.value = item.duration;
+        if (item.status === "done") {
+          item.status = "ready";
+          item.output_url = null;
+          item.job_id = null;
+          render();
+        }
+      });
+    }
   }
 }
 
@@ -314,11 +338,43 @@ function cardTemplate(item) {
       </select>
       <button class="secondary" data-action="shuffle" type="button" title="Random motion">🎲</button>
     </div>
+    <div class="card-row card-duration">
+      <label>Duration</label>
+      <input data-field="duration" type="number"
+        min="${state.config?.duration_min ?? 1}" max="${state.config?.duration_max ?? 30}" step="1"
+        value="${item.duration}"
+        ${item.status === "rendering" || item.status === "uploading" ? "disabled" : ""} />
+      <span>s</span>
+    </div>
     <div class="card-row">
       ${renderButton}
     </div>
     ${item.error ? `<p class="card-error">${escapeHtml(item.error)}</p>` : ""}
   `;
+}
+
+function clampDuration(value) {
+  const min = state.config?.duration_min ?? 1;
+  const max = state.config?.duration_max ?? 30;
+  const fallback = state.config?.default_duration ?? 7;
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+async function saveDefaultDuration() {
+  const next = clampDuration(els.defaultDurationInput.value);
+  els.defaultDurationInput.value = next;
+  if (state.config) state.config.default_duration = next;
+  try {
+    await fetchJson("/api/set-default-duration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seconds: next }),
+    });
+  } catch (err) {
+    console.error("save default duration failed", err);
+  }
 }
 
 async function pickOutputFolder() {

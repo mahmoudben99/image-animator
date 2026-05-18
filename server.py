@@ -72,6 +72,20 @@ def current_output_dir() -> Path:
     return DEFAULT_OUTPUT_DIR
 
 
+DURATION_MIN = 1
+DURATION_MAX = 30
+DURATION_FALLBACK = 7
+
+
+def current_default_duration() -> int:
+    raw = load_settings().get("default_duration", DURATION_FALLBACK)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DURATION_FALLBACK
+    return max(DURATION_MIN, min(DURATION_MAX, value))
+
+
 # ---------- Motion presets ----------
 MOTIONS = [
     {
@@ -245,7 +259,28 @@ def get_config() -> dict:
         "output_dir": str(current_output_dir()),
         "motions": MOTIONS,
         "default_motion_ids": DEFAULT_MOTION_IDS,
+        "default_duration": current_default_duration(),
+        "duration_min": DURATION_MIN,
+        "duration_max": DURATION_MAX,
     }
+
+
+@app.post("/api/set-default-duration")
+def set_default_duration(payload: dict) -> dict:
+    raw = payload.get("seconds")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="seconds must be an integer")
+    if value < DURATION_MIN or value > DURATION_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"seconds must be between {DURATION_MIN} and {DURATION_MAX}",
+        )
+    settings = load_settings()
+    settings["default_duration"] = value
+    save_settings(settings)
+    return {"default_duration": value}
 
 
 @app.post("/api/pick-output-dir")
@@ -447,7 +482,11 @@ def get_image(image_id: str):
 def start_render(payload: dict) -> dict:
     image_id = payload.get("image_id")
     motion_id = payload.get("motion_id")
-    duration = int(payload.get("duration") or 5)
+    try:
+        duration = int(payload.get("duration") or current_default_duration())
+    except (TypeError, ValueError):
+        duration = current_default_duration()
+    duration = max(DURATION_MIN, min(DURATION_MAX, duration))
     if not image_id or not motion_id:
         raise HTTPException(status_code=400, detail="image_id and motion_id required")
     motion_by_id(motion_id)

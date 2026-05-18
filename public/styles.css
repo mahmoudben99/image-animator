@@ -129,6 +129,58 @@ select:focus { outline: 3px solid color-mix(in srgb, var(--accent), transparent 
 }
 .output-dir:hover { color: var(--accent); }
 
+.topbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 10px 0 4px;
+}
+.topbar-field input {
+  width: 56px;
+  height: 32px;
+  background: var(--input);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  font: inherit;
+  text-align: center;
+}
+.topbar-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.card-duration {
+  align-items: center;
+  gap: 8px;
+}
+.card-duration label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.card-duration input {
+  width: 64px;
+  height: 32px;
+  background: var(--input);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  font: inherit;
+  text-align: center;
+}
+.card-duration input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.card-duration span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .workspace {
   max-width: 1400px;
   margin: 0 auto;
