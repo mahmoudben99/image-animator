@@ -156,13 +156,17 @@ select:focus { outline: 3px solid color-mix(in srgb, var(--accent), transparent 
 .card-duration {
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .card-duration label {
   color: var(--muted);
   font-size: 12px;
 }
-.card-duration input {
-  width: 64px;
+.card-duration .strength-label {
+  margin-left: 8px;
+}
+.card-duration input,
+.card-duration select {
   height: 32px;
   background: var(--input);
   color: var(--ink);
@@ -170,13 +174,21 @@ select:focus { outline: 3px solid color-mix(in srgb, var(--accent), transparent 
   border-radius: 6px;
   padding: 0 8px;
   font: inherit;
+}
+.card-duration input {
+  width: 64px;
   text-align: center;
 }
-.card-duration input:focus {
+.card-duration select {
+  flex: 1;
+  min-width: 0;
+}
+.card-duration input:focus,
+.card-duration select:focus {
   outline: none;
   border-color: var(--accent);
 }
-.card-duration span {
+.card-duration > span {
   color: var(--muted);
   font-size: 12px;
 }

@@ -76,6 +76,22 @@ DURATION_MIN = 1
 DURATION_MAX = 30
 DURATION_FALLBACK = 7
 
+# Strength multiplier applied to motion intensity. 1.0 = "normal".
+STRENGTH_MIN = 0.25
+STRENGTH_MAX = 2.5
+STRENGTH_DEFAULT = 1.0
+
+# 5s is the duration the per-motion --intensity values in MOTIONS were tuned
+# for. effective_intensity is scaled linearly with duration so a 10s clip
+# travels twice as far as a 5s clip and feels comparably alive — clamped to
+# INTENSITY_CAP so DepthFlow never enters absurd parallax territory.
+REFERENCE_DURATION = 5
+INTENSITY_FLOOR = 0.05
+INTENSITY_CAP = 2.0
+
+# Preset names DepthFlow recognizes that take their own --intensity flag.
+_DEPTHFLOW_PRESETS = {"horizontal", "vertical", "zoom", "dolly", "circle", "orbital"}
+
 
 def current_default_duration() -> int:
     raw = load_settings().get("default_duration", DURATION_FALLBACK)
@@ -84,6 +100,14 @@ def current_default_duration() -> int:
     except (TypeError, ValueError):
         return DURATION_FALLBACK
     return max(DURATION_MIN, min(DURATION_MAX, value))
+
+
+def clamp_strength(raw) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return STRENGTH_DEFAULT
+    return max(STRENGTH_MIN, min(STRENGTH_MAX, value))
 
 
 # ---------- Motion presets ----------
@@ -158,6 +182,25 @@ def motion_by_id(motion_id: str) -> dict:
     raise HTTPException(status_code=400, detail=f"Unknown motion: {motion_id}")
 
 
+def build_motion_args(motion: dict, duration: int, strength: float) -> list[str]:
+    """Return depthflow CLI args with each --intensity scaled for the requested
+    duration and strength. Walks the args list and rewrites any value that
+    follows --intensity, so compound presets (e.g. diagonal_pan_zoom) get every
+    intensity rescaled."""
+    args = list(motion["args"])
+    duration_scale = max(0.2, duration / REFERENCE_DURATION)
+    multiplier = duration_scale * strength
+    for i in range(len(args) - 1):
+        if args[i] == "--intensity":
+            try:
+                base = float(args[i + 1])
+            except (TypeError, ValueError):
+                continue
+            effective = max(INTENSITY_FLOOR, min(INTENSITY_CAP, base * multiplier))
+            args[i + 1] = f"{effective:.3f}"
+    return args
+
+
 # ---------- Job tracking ----------
 @dataclass
 class Job:
@@ -166,6 +209,7 @@ class Job:
     motion_id: str
     duration: int
     output_path: Path
+    strength: float = STRENGTH_DEFAULT
     status: str = "queued"  # queued / rendering / done / error
     error: Optional[str] = None
     started_at: float = 0.0
@@ -196,10 +240,11 @@ def next_job() -> Optional[Job]:
 
 def run_depthflow(job: Job) -> None:
     motion = motion_by_id(job.motion_id)
+    args = build_motion_args(motion, job.duration, job.strength)
     cmd = [
         sys.executable, "-m", "depthflow",
         "input", "-i", str(job.image_path),
-        *motion["args"],
+        *args,
         "main", "-o", str(job.output_path), "-t", str(job.duration),
     ]
     env = os.environ.copy()
@@ -250,6 +295,14 @@ def on_startup() -> None:
     ensure_worker()
 
 
+STRENGTH_PRESETS = [
+    {"value": 0.5, "label": "Subtle"},
+    {"value": 1.0, "label": "Normal"},
+    {"value": 1.5, "label": "Strong"},
+    {"value": 2.0, "label": "Very strong"},
+]
+
+
 @app.get("/api/config")
 def get_config() -> dict:
     return {
@@ -262,6 +315,8 @@ def get_config() -> dict:
         "default_duration": current_default_duration(),
         "duration_min": DURATION_MIN,
         "duration_max": DURATION_MAX,
+        "default_strength": STRENGTH_DEFAULT,
+        "strength_presets": STRENGTH_PRESETS,
     }
 
 
@@ -487,6 +542,7 @@ def start_render(payload: dict) -> dict:
     except (TypeError, ValueError):
         duration = current_default_duration()
     duration = max(DURATION_MIN, min(DURATION_MAX, duration))
+    strength = clamp_strength(payload.get("strength", STRENGTH_DEFAULT))
     if not image_id or not motion_id:
         raise HTTPException(status_code=400, detail="image_id and motion_id required")
     motion_by_id(motion_id)
@@ -508,6 +564,7 @@ def start_render(payload: dict) -> dict:
         motion_id=motion_id,
         duration=duration,
         output_path=output_path,
+        strength=strength,
     )
     queue_job(job)
     return {"job_id": job_id, "status": job.status}

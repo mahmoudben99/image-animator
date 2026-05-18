@@ -119,6 +119,7 @@ async function addFiles(files) {
       preview_url: null,
       motion_id: pickRandomMotion(),
       duration: state.config?.default_duration ?? 7,
+      strength: state.config?.default_strength ?? 1.0,
       status: "uploading",
       job_id: null,
       output_url: null,
@@ -163,16 +164,25 @@ function clearAll() {
   render();
 }
 
-async function renderAll() {
-  const pending = state.items.filter((it) => it.status === "ready");
-  for (const item of pending) {
-    await startRender(item);
+function renderAll() {
+  // Fire all renderable items in parallel; the FastAPI worker queues them
+  // server-side so only one runs at a time. Each item independently polls and
+  // updates its own status, so the user sees "queued" on the rest while the
+  // first renders. Important: don't await — awaiting the loop made the user
+  // think the button was dead and re-trigger renders manually, which then
+  // double-fired when the original loop continued.
+  for (const item of state.items) {
+    if (item.status === "ready" || item.status === "error") {
+      startRender(item);
+    }
   }
 }
 
 async function startRender(item) {
   if (!item.image_id || !item.motion_id) return;
-  item.status = "rendering";
+  // Guard against double-fire (Render All + manual click on the same card).
+  if (item.status === "queued" || item.status === "rendering") return;
+  item.status = "queued";
   item.error = null;
   render();
   try {
@@ -183,6 +193,7 @@ async function startRender(item) {
         image_id: item.image_id,
         motion_id: item.motion_id,
         duration: clampDuration(item.duration),
+        strength: clampStrength(item.strength),
       }),
     });
     const data = await resp.json();
@@ -202,6 +213,11 @@ async function pollJob(item) {
     await sleep(1200);
     try {
       const data = await fetchJson(`/api/job/${item.job_id}`);
+      // Reflect server-side state changes (queued -> rendering -> done)
+      if (data.status === "rendering" && item.status !== "rendering") {
+        item.status = "rendering";
+        render();
+      }
       if (data.status === "done") {
         item.status = "done";
         item.output_url = data.output_url;
@@ -225,14 +241,20 @@ async function pollJob(item) {
 
 function render() {
   els.grid.innerHTML = "";
-  const pending = state.items.filter((it) => it.status === "ready").length;
-  els.renderAllBtn.disabled = pending === 0;
+  const ready = state.items.filter((it) => it.status === "ready" || it.status === "error").length;
+  els.renderAllBtn.disabled = ready === 0;
   if (state.items.length === 0) {
     els.queueStatus.textContent = "No images yet";
   } else {
     const done = state.items.filter((it) => it.status === "done").length;
     const rendering = state.items.filter((it) => it.status === "rendering").length;
-    els.queueStatus.textContent = `${state.items.length} image${state.items.length > 1 ? "s" : ""} · ${done} done · ${pending} ready · ${rendering} rendering`;
+    const queued = state.items.filter((it) => it.status === "queued").length;
+    const parts = [`${state.items.length} image${state.items.length > 1 ? "s" : ""}`];
+    if (done) parts.push(`${done} done`);
+    if (rendering) parts.push(`${rendering} rendering`);
+    if (queued) parts.push(`${queued} queued`);
+    if (ready) parts.push(`${ready} ready`);
+    els.queueStatus.textContent = parts.join(" · ");
   }
 
   for (const item of state.items) {
@@ -294,6 +316,19 @@ function render() {
         }
       });
     }
+
+    const strengthInput = card.querySelector("[data-field='strength']");
+    if (strengthInput) {
+      strengthInput.addEventListener("change", (e) => {
+        item.strength = clampStrength(e.target.value);
+        if (item.status === "done") {
+          item.status = "ready";
+          item.output_url = null;
+          item.job_id = null;
+          render();
+        }
+      });
+    }
   }
 }
 
@@ -305,16 +340,28 @@ function cardTemplate(item) {
       : `<div></div>`;
   const badgeText = item.status === "rendering"
     ? `<span class="spinner"></span>Rendering`
-    : item.status === "done"
-      ? "Ready"
-      : item.status === "error"
-        ? "Failed"
-        : item.status === "uploading"
-          ? "Uploading"
-          : "Queued";
+    : item.status === "queued"
+      ? "Queued"
+      : item.status === "done"
+        ? "Done"
+        : item.status === "error"
+          ? "Failed"
+          : item.status === "uploading"
+            ? "Uploading"
+            : "Ready";
 
   const motionOpts = (state.config?.motions || []).map((m) =>
     `<option value="${m.id}"${m.id === item.motion_id ? " selected" : ""}>${escapeHtml(m.label)}</option>`
+  ).join("");
+
+  const strengthPresets = state.config?.strength_presets || [
+    { value: 0.5, label: "Subtle" },
+    { value: 1.0, label: "Normal" },
+    { value: 1.5, label: "Strong" },
+    { value: 2.0, label: "Very strong" },
+  ];
+  const strengthOpts = strengthPresets.map((p) =>
+    `<option value="${p.value}"${Math.abs(p.value - item.strength) < 0.001 ? " selected" : ""}>${escapeHtml(p.label)}</option>`
   ).join("");
 
   const renderButton = item.status === "ready" || item.status === "error"
@@ -322,6 +369,8 @@ function cardTemplate(item) {
     : item.status === "done"
       ? `<button class="secondary" data-action="render" type="button">Re-render</button>`
       : `<button class="secondary" disabled type="button">…</button>`;
+
+  const inputsDisabled = item.status === "rendering" || item.status === "queued" || item.status === "uploading";
 
   return `
     <div class="card-media">
@@ -333,7 +382,7 @@ function cardTemplate(item) {
       <button class="secondary" data-action="remove" type="button" title="Remove">✕</button>
     </div>
     <div class="card-row">
-      <select ${item.status === "rendering" || item.status === "uploading" ? "disabled" : ""}>
+      <select ${inputsDisabled ? "disabled" : ""}>
         ${motionOpts}
       </select>
       <button class="secondary" data-action="shuffle" type="button" title="Random motion">🎲</button>
@@ -343,8 +392,12 @@ function cardTemplate(item) {
       <input data-field="duration" type="number"
         min="${state.config?.duration_min ?? 1}" max="${state.config?.duration_max ?? 30}" step="1"
         value="${item.duration}"
-        ${item.status === "rendering" || item.status === "uploading" ? "disabled" : ""} />
+        ${inputsDisabled ? "disabled" : ""} />
       <span>s</span>
+      <label class="strength-label">Strength</label>
+      <select data-field="strength" ${inputsDisabled ? "disabled" : ""}>
+        ${strengthOpts}
+      </select>
     </div>
     <div class="card-row">
       ${renderButton}
@@ -360,6 +413,13 @@ function clampDuration(value) {
   const n = Number.parseInt(value, 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function clampStrength(value) {
+  const fallback = state.config?.default_strength ?? 1.0;
+  const n = Number.parseFloat(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0.25, Math.min(2.5, n));
 }
 
 async function saveDefaultDuration() {
