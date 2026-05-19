@@ -238,21 +238,60 @@ def next_job() -> Optional[Job]:
     return None
 
 
+MAX_INPUT_WIDTH = 1920  # cap input to 1080p-equivalent before depthflow
+
+
+def _maybe_resize_input(image_path: Path, job_id: str) -> tuple[Path, bool]:
+    """If the input image is larger than MAX_INPUT_WIDTH on its longest edge,
+    write a downscaled copy to a temp file and return its path. Returns
+    (path_to_use, is_temp). Caller is responsible for deleting if is_temp.
+
+    Reason: depthflow renders at input resolution by default. On 4K+ source
+    images x264 needs ~100MB of encoder buffer space and OOMs on machines
+    with limited RAM. A team member hit this with an upscaled landscape
+    image — error was "x264 [error]: malloc of size 102506624 failed".
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return image_path, False
+    try:
+        with Image.open(image_path) as img:
+            iw, ih = img.size
+            if max(iw, ih) <= MAX_INPUT_WIDTH:
+                return image_path, False
+            ratio = MAX_INPUT_WIDTH / max(iw, ih)
+            new_size = (int(iw * ratio), int(ih * ratio))
+            img = img.convert("RGB")  # depthflow prefers RGB, drops alpha
+            img = img.resize(new_size, Image.LANCZOS)
+            resized = image_path.parent / f".resized_{job_id}.png"
+            img.save(resized, "PNG")
+            return resized, True
+    except Exception:
+        return image_path, False
+
+
 def run_depthflow(job: Job) -> None:
     motion = motion_by_id(job.motion_id)
     args = build_motion_args(motion, job.duration, job.strength)
+    input_path, is_temp = _maybe_resize_input(job.image_path, job.id)
     cmd = [
         sys.executable, "-m", "depthflow",
-        "input", "-i", str(job.image_path),
+        "input", "-i", str(input_path),
         *args,
         "main", "-o", str(job.output_path), "-t", str(job.duration),
     ]
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     # Suppress the cp1252 logging error chatter on Windows
-    proc = subprocess.run(
-        cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    finally:
+        if is_temp:
+            try: input_path.unlink()
+            except Exception: pass
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "")[-2000:]
         raise RuntimeError(f"DepthFlow failed:\n{tail}")
