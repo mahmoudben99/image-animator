@@ -51,7 +51,15 @@ def main() -> None:
         min_size=(900, 640),
         text_select=True,
     )
-    webview.start()
+    # Force the EdgeChromium backend (Windows' built-in WebView2). The default
+    # 'winforms' backend goes through pythonnet → .NET Framework, which fails
+    # on machines without .NET 4.8 installed (common on fresh Windows installs).
+    # WebView2 is pre-installed on Windows 10 1803+ and Windows 11.
+    try:
+        webview.start(gui="edgechromium")
+    except Exception:
+        # If EdgeChromium fails (very old Windows), fall back to default.
+        webview.start()
 
 
 if __name__ == "__main__":
