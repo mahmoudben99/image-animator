@@ -51,15 +51,13 @@ def main() -> None:
         min_size=(900, 640),
         text_select=True,
     )
-    # Force the EdgeChromium backend (Windows' built-in WebView2). The default
-    # 'winforms' backend goes through pythonnet → .NET Framework, which fails
-    # on machines without .NET 4.8 installed (common on fresh Windows installs).
-    # WebView2 is pre-installed on Windows 10 1803+ and Windows 11.
-    try:
-        webview.start(gui="edgechromium")
-    except Exception:
-        # If EdgeChromium fails (very old Windows), fall back to default.
-        webview.start()
+    # Use pywebview's default backend selection. On Windows this is the proven
+    # path (winforms via pythonnet) that worked in v0.1.0–0.1.4. NOTE: do NOT
+    # force gui="edgechromium" — it ALSO routes through pythonnet (so it
+    # doesn't dodge the .NET dependency) and it failed to open the window on
+    # some machines. The real fix for the original launch failure was
+    # unblocking the downloaded files (Zone.Identifier), handled in the .bat.
+    webview.start()
 
 
 if __name__ == "__main__":
